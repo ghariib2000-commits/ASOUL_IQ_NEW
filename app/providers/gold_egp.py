@@ -86,12 +86,14 @@ class GoldEgyptProvider:
         gram_24 = (ounce_usd / TROY_OUNCE_GRAMS) * usd_egp * config.GOLD_MARKET_PREMIUM
         gram_21 = gram_24 * 21 / 24
         gram_18 = gram_24 * 18 / 24
+        gram_14 = gram_24 * 14 / 24
         gold_pound = gram_21 * 8  # الجنيه الذهب = 8 جرام عيار 21
 
         quotes = (
             Quote("GOLD_24", "عيار 24", round(gram_24, 2), "جنيه/جرام"),
             Quote("GOLD_21", "عيار 21", round(gram_21, 2), "جنيه/جرام"),
             Quote("GOLD_18", "عيار 18", round(gram_18, 2), "جنيه/جرام"),
+            Quote("GOLD_14", "عيار 14", round(gram_14, 2), "جنيه/جرام"),
             Quote("GOLD_POUND", "الجنيه الذهب", round(gold_pound, 2), "جنيه"),
         )
 

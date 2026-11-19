@@ -30,6 +30,14 @@ DEFAULT_MINUTE = 0
 
 WEEKDAYS_AR = ("الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد")
 
+# ترتيب مجموعات أصول المستخدم داخل التقرير.
+REPORT_KINDS = (
+    ("commodity", "🟡 الذهب"),
+    ("currency", "💵 العملات"),
+    ("index", "📉 المؤشرات"),
+    ("equity", "🏦 أسهم البورصة"),
+)
+
 _ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
 
 
@@ -178,19 +186,47 @@ def build_report(
     ]
 
     stale: list[str] = []
-    for item in items:
-        name = escape(str(item["name_ar"]))
-        code = escape(str(item["code"]))
-        if item["price"] is None:
-            lines.append(f"• {name} ({code}): <i>بدون سعر محدث</i>")
+    movers: list[tuple[str, float]] = []
+    has_gold = False
+
+    for kind, heading in REPORT_KINDS:
+        group = [item for item in items if item["kind"] == kind]
+        if not group:
             continue
-        change = _change_text(float(item["price"]), item["prev_price"])
-        lines.append(
-            f"• {name} ({code}): <b>{float(item['price']):,.2f}</b> "
-            f"{escape(str(item['unit']))}{change}"
-        )
-        if item["stale"]:
-            stale.append(code)
+        lines.append("")
+        lines.append(f"<b>{heading}</b>")
+        if kind == "commodity":
+            has_gold = True
+        for item in group:
+            name = escape(str(item["name_ar"]))
+            code = escape(str(item["code"]))
+            if item["price"] is None:
+                lines.append(f"• {name} ({code}): <i>بدون سعر محدث</i>")
+                continue
+            price = float(item["price"])
+            change = _change_text(price, item["prev_price"])
+            lines.append(
+                f"• {name} ({code}): <b>{price:,.2f}</b> "
+                f"{escape(str(item['unit']))}{change}"
+            )
+            if item["prev_price"]:
+                pct = (price - float(item["prev_price"])) / float(item["prev_price"]) * 100
+                movers.append((name, pct))
+            if item["stale"]:
+                stale.append(code)
+
+    if len(movers) >= 2:
+        best = max(movers, key=lambda pair: pair[1])
+        worst = min(movers, key=lambda pair: pair[1])
+        if best[1] > 0:
+            lines.append("")
+            lines.append(f"🔺 أعلى ارتفاع: {best[0]} ({best[1]:+.2f}%)")
+        if worst[1] < 0:
+            lines.append(f"🔻 أكبر هبوط: {worst[0]} ({worst[1]:+.2f}%)")
+
+    if has_gold:
+        lines.append("")
+        lines.append("<i>🟡 سعر الذهب تقديري محسوب من السعر العالمي وسعر الصرف.</i>")
 
     if stale:
         lines.append("")

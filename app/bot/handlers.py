@@ -19,6 +19,7 @@ from telegram.ext import (
 )
 
 from app import config
+from app.bot import alert_ui, browse
 from app.db.backup import BackupError, backup_database
 from app.providers import PROVIDERS
 from app.services import alerts, assets, market, prices, reports, users, watchlist
@@ -29,25 +30,26 @@ BACK_BUTTON = "🔙 العودة للقائمة الرئيسية"
 
 
 def main_menu_keyboard() -> InlineKeyboardMarkup:
+    """القائمة الرئيسية: أقسام قابلة للتصفح بدل أوامر تُحفظ."""
     rows = [
-        [InlineKeyboardButton(provider.label, callback_data=f"fetch_{key}")]
-        for key, provider in PROVIDERS.items()
-    ]
-    rows.append(
+        [
+            InlineKeyboardButton("🟡 الذهب والصاغة", callback_data="br:gold:0"),
+            InlineKeyboardButton("💵 العملات", callback_data="br:fx:0"),
+        ],
+        [
+            InlineKeyboardButton("🏦 أسهم البورصة", callback_data="bgl:egx"),
+            InlineKeyboardButton("📉 المؤشرات", callback_data="br:idx:0"),
+        ],
         [
             InlineKeyboardButton("⭐ قائمتي", callback_data="menu_watchlist"),
-            InlineKeyboardButton("🔍 البحث", callback_data="menu_search"),
-        ]
-    )
-    rows.append(
+            InlineKeyboardButton("🔍 البحث", callback_data="browse"),
+        ],
         [
             InlineKeyboardButton("🔔 تنبيهاتي", callback_data="menu_alerts"),
             InlineKeyboardButton("📬 التقرير اليومي", callback_data="menu_report"),
-        ]
-    )
-    rows.append(
-        [InlineKeyboardButton("⚙️ إعدادات المتابعة والتنبيهات", callback_data="menu_settings")]
-    )
+        ],
+        [InlineKeyboardButton("⚙️ إعدادات المتابعة والتنبيهات", callback_data="menu_settings")],
+    ]
     return InlineKeyboardMarkup(rows)
 
 
@@ -111,32 +113,80 @@ def _chunk(buttons: list[InlineKeyboardButton], size: int = 2) -> list[list[Inli
     return [buttons[i : i + size] for i in range(0, len(buttons), size)]
 
 
-def watchlist_view(telegram_id: int) -> tuple[str, InlineKeyboardMarkup]:
-    """يبني نص ولوحة قائمة المتابعة مع حالة حداثة كل سعر."""
-    items = watchlist.items(telegram_id)
+# ترتيب عرض مجموعات قائمة المتابعة.
+WATCHLIST_KINDS = (
+    ("commodity", "🟡 الذهب"),
+    ("currency", "💵 العملات"),
+    ("index", "📉 المؤشرات"),
+    ("equity", "🏦 أسهم البورصة"),
+)
+
+
+def _change_suffix(item: dict) -> str:
+    """نسبة التغير مقارنة بالسعر السابق المخزَّن."""
+    price, prev = item.get("price"), item.get("prev_price")
+    if price is None or not prev:
+        return ""
+    try:
+        change = (float(price) - float(prev)) / float(prev) * 100
+    except (TypeError, ZeroDivisionError):
+        return ""
+    if change > 0:
+        return f" ▲ {change:+.2f}%"
+    if change < 0:
+        return f" ▼ {change:+.2f}%"
+    return " — 0.00%"
+
+
+def watchlist_view(
+    telegram_id: int, db_path=None
+) -> tuple[str, InlineKeyboardMarkup]:
+    """قائمة المتابعة مجمّعة بالأقسام مع السعر ونسبة التغير."""
+    items = watchlist.items(telegram_id, db_path)
     if not items:
         return (
-            "⭐ <b>قائمتي</b>\n\nالقائمة فاضية.\n"
-            "ابعت /search واسم الأصل أو كوده لإضافته (مثال: <code>/search دولار</code>).",
-            InlineKeyboardMarkup([[InlineKeyboardButton(BACK_BUTTON, callback_data="main_menu")]]),
+            "⭐ <b>قائمتك</b>\n\nالقائمة فاضية.\n"
+            "افتح قسم من الأقسام واضغط ➕ جنب أي أصل يضاف هنا فورًا.",
+            InlineKeyboardMarkup(
+                [
+                    [InlineKeyboardButton("🔍 تصفح الأسواق", callback_data="browse")],
+                    [InlineKeyboardButton(BACK_BUTTON, callback_data="main_menu")],
+                ]
+            ),
         )
 
-    lines = [f"⭐ <b>قائمتي</b> ({len(items)} أصل)", ""]
-    for item in items:
-        if item["price"] is None:
-            price_text = "بدون سعر محدث"
-        else:
-            price_text = f"{item['price']:,.2f} {item['unit']}"
-            if item["stale"]:
-                price_text += " ⚠️ سعر قديم"
-        lines.append(f"• <b>{item['name_ar']}</b> ({item['code']}): {price_text}")
+    lines = [
+        f"⭐ <b>قائمتك</b> — {len(items)} من {watchlist.MAX_ITEMS} أصل",
+        "",
+    ]
+    for kind, heading in WATCHLIST_KINDS:
+        group = [item for item in items if item["kind"] == kind]
+        if not group:
+            continue
+        lines.append(f"<b>{heading}</b>")
+        for item in group:
+            if item["price"] is None:
+                price_text = "بدون سعر محدث"
+            else:
+                price_text = f"{item['price']:,.2f} {item['unit']}{_change_suffix(item)}"
+                if item["stale"]:
+                    price_text += " ⚠️"
+            lines.append(f"• <b>{item['name_ar']}</b> ({item['code']}): {price_text}")
+        lines.append("")
+
+    lines.append("<i>🗑 تحت القائمة يزيل الأصل، و🔄 بيحدّث الأسعار.</i>")
 
     remove_buttons = [
         InlineKeyboardButton(f"🗑 {item['code']}", callback_data=f"wl_del:{item['code']}")
         for item in items
     ]
     keyboard = _chunk(remove_buttons)
-    keyboard.append([InlineKeyboardButton("🔄 تحديث الأسعار", callback_data="wl_refresh")])
+    keyboard.append(
+        [
+            InlineKeyboardButton("🔄 تحديث الأسعار", callback_data="wl_refresh"),
+            InlineKeyboardButton("🔍 تصفح", callback_data="browse"),
+        ]
+    )
     keyboard.append([InlineKeyboardButton(BACK_BUTTON, callback_data="main_menu")])
     return "\n".join(lines), InlineKeyboardMarkup(keyboard)
 
@@ -285,6 +335,57 @@ async def _send_prices(query, service_key: str) -> None:
     )
 
 
+async def _refresh_section(section: str) -> None:
+    """يحدّث أسعار القسم إن مر وقتها (أو يجلب فورًا لو القسم لسه فاضي)."""
+    provider_key = browse.SECTION_PROVIDERS.get(section)
+    if not provider_key:
+        return
+    try:
+        has_items = bool(await asyncio.to_thread(browse.section_items, section))
+        if has_items:
+            await asyncio.to_thread(prices.refresh_if_due, provider_key)
+        else:
+            # أول فتح للقسم: الأسهم تُسجَّل من المصدر أول مرة، فنجلب فورًا.
+            await asyncio.to_thread(prices.refresh, provider_key, None, True)
+    except Exception:  # noqa: BLE001 - فشل المصدر لا يمنع عرض القائمة
+        logger.exception("فشل تحديث أسعار %s", provider_key)
+
+
+async def _show_browse(query, telegram_id: int, section: str, page: int) -> None:
+    """يعرض صفحة قسم كاملة."""
+    await _refresh_section(section)
+    text, keyboard = await asyncio.to_thread(
+        browse.browse_view, section, page, telegram_id
+    )
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
+
+
+async def _show_groups(query, section: str) -> None:
+    """يعرض مجموعات الحروف لقسم كبير."""
+    await _refresh_section(section)
+    text, keyboard = await asyncio.to_thread(browse.groups_view, section)
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
+
+
+async def _show_alert_screen(
+    query, telegram_id: int, code: str, section: str, page: int, group_tag: str, note: str = ""
+) -> None:
+    """شاشة تنبيه الأصل من داخل القائمة."""
+    text, keyboard = await asyncio.to_thread(
+        alert_ui.alert_screen, code, telegram_id, (section, page, group_tag), note
+    )
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
+
+
+async def _show_group(query, telegram_id: int, section: str, index: int, page: int) -> None:
+    """يعرض صفحة من مجموعة حرف."""
+    await _refresh_section(section)
+    text, keyboard = await asyncio.to_thread(
+        browse.group_view, section, index, page, telegram_id
+    )
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
+
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if query is None or query.from_user is None:
@@ -311,9 +412,96 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if data == "main_menu":
         await query.edit_message_text(
-            "📊 <b>القائمة الرئيسية — ASOUL.IQ</b>\nاختر الخدمة المطلوبة:",
+            "📊 <b>القائمة الرئيسية — ASOUL.IQ</b>\n"
+            "اختار القسم اللي تحبه وشوف الأسعار وتابع اللي يهمك:",
             reply_markup=main_menu_keyboard(),
             parse_mode="HTML",
+        )
+
+    elif data in ("browse", "menu_search"):
+        text, keyboard = await asyncio.to_thread(browse.browse_menu_view)
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
+
+    elif data.startswith("br:"):
+        _, section, raw_page = (data.split(":") + ["0"])[:3]
+        page = int(raw_page) if raw_page.isdigit() else 0
+        await _show_browse(query, telegram_id, section, page)
+
+    elif data.startswith("bgl:"):
+        await _show_groups(query, data.split(":", 1)[1])
+
+    elif data.startswith("bg:"):
+        _, section, raw_index, raw_page = (data.split(":") + ["0", "0"])[:4]
+        await _show_group(
+            query,
+            telegram_id,
+            section,
+            int(raw_index) if raw_index.isdigit() else 0,
+            int(raw_page) if raw_page.isdigit() else 0,
+        )
+
+    elif data.startswith("brr:"):
+        parts = data.split(":")
+        section = parts[1] if len(parts) > 1 else "gold"
+        page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        provider_key = browse.SECTION_PROVIDERS.get(section)
+        if provider_key:
+            await query.answer("🔄 جاري تحديث الأسعار...")
+            try:
+                await asyncio.to_thread(prices.refresh, provider_key, None, True)
+            except Exception:  # noqa: BLE001
+                logger.exception("فشل تحديث أسعار %s", provider_key)
+        await _show_browse(query, telegram_id, section, page)
+
+    elif data.startswith("tg:"):
+        _, code, section, raw_page, group_tag = (data.split(":") + ["", "0", "-"])[:5]
+        page = int(raw_page) if raw_page.isdigit() else 0
+        status = await asyncio.to_thread(browse.toggle, telegram_id, code)
+        answers = {
+            "added": "✅ تمت الإضافة لقائمتك",
+            "removed": "🗑 تمت الإزالة من قائمتك",
+            "full": "⚠️ قائمتك وصلت للحد الأقصى",
+            "missing": "⚠️ الأصل غير متاح",
+        }
+        await query.answer(answers.get(status, "تم"))
+        if group_tag.isdigit():
+            await _show_group(query, telegram_id, section, int(group_tag), page)
+        else:
+            await _show_browse(query, telegram_id, section, page)
+
+    elif data.startswith("al:"):
+        _, code, section, raw_page, group_tag = (data.split(":") + ["", "0", "-"])[:5]
+        page = int(raw_page) if raw_page.isdigit() else 0
+        await _show_alert_screen(query, telegram_id, code, section, page, group_tag)
+
+    elif data.startswith("aa:"):
+        _, code, token, section, raw_page, group_tag = (
+            data.split(":") + ["", "", "0", "-"]
+        )[:6]
+        page = int(raw_page) if raw_page.isdigit() else 0
+        if token == "manual":
+            await query.answer()
+            await query.edit_message_text(
+                alert_ui.manual_hint(code),
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "🔙 رجوع",
+                                callback_data=f"al:{code}:{section}:{page}:{group_tag}",
+                            )
+                        ]
+                    ]
+                ),
+            )
+            return
+        _status, message = await asyncio.to_thread(
+            alert_ui.apply_action, telegram_id, code, token
+        )
+        await query.answer(message.split("\n")[0])
+        await _show_alert_screen(
+            query, telegram_id, code, section, page, group_tag, note=message
         )
 
     elif data == "menu_settings":
@@ -322,15 +510,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "• يمكنك تفعيل أو إيقاف استلام التحديثات.\n"
             "• يمكنك تحديد الأقسام التي تهمك:",
             reply_markup=settings_keyboard(telegram_id),
-            parse_mode="HTML",
-        )
-
-    elif data == "menu_search":
-        await query.edit_message_text(
-            "🔍 <b>البحث عن أصل</b>\n\n"
-            "ابعت الأمر ده مع اسم الأصل أو كوده:\n"
-            "<code>/search دولار</code>\n<code>/search GOLD_21</code>",
-            reply_markup=_back_keyboard(),
             parse_mode="HTML",
         )
 

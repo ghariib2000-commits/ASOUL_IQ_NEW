@@ -19,7 +19,7 @@ class GoldProviderTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertTrue(result.is_estimate)
-        self.assertEqual(len(result.quotes), 4)
+        self.assertEqual(len(result.quotes), 5)
 
         expected_24 = (3000.0 / TROY_OUNCE_GRAMS) * 50.0 * 1.018
         values = {quote.code: quote.value for quote in result.quotes}

@@ -76,6 +76,10 @@ GOLD_ASSETS: tuple[AssetDefinition, ...] = (
         unit="جنيه/جرام", provider_key="gold",
     ),
     AssetDefinition(
+        "GOLD_14", KIND_COMMODITY, "ذهب عيار 14", "Gold 14K",
+        unit="جنيه/جرام", provider_key="gold",
+    ),
+    AssetDefinition(
         "GOLD_POUND", KIND_COMMODITY, "الجنيه الذهب", "Gold Pound",
         provider_key="gold",
     ),

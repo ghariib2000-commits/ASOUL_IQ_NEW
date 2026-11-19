@@ -184,6 +184,54 @@ class ReportContentTests(unittest.TestCase):
         self.assertIn("تنبيهات نشطة", text)
 
 
+class ReportLayoutTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = make_db(Path(self._tmp.name))
+        users.register_consent(1, "أحمد", self.db)
+        watchlist.add(1, "USD", self.db)
+        watchlist.add(1, "GOLD_21", self.db)
+        prices.save_result(
+            ProviderResult(
+                provider_key="test",
+                provider_label="اختبار",
+                ok=True,
+                fetched_at=now_cairo(),
+                quotes=(
+                    Quote("USD", "دولار أمريكي", 56.0, "جنيه", 2),
+                    Quote("GOLD_21", "عيار 21", 4000.0, "جنيه/جرام", 2),
+                ),
+                sources=("test",),
+            ),
+            self.db,
+        )
+        with session(self.db) as conn:
+            conn.execute("UPDATE latest_prices SET prev_price = 50 WHERE asset_code = 'USD'")
+            conn.execute(
+                "UPDATE latest_prices SET prev_price = 5000 WHERE asset_code = 'GOLD_21'"
+            )
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_assets_are_grouped_by_section(self) -> None:
+        text = reports.build_report(1, self.db)
+        self.assertIn("🟡 الذهب", text)
+        self.assertIn("💵 العملات", text)
+        self.assertLess(text.index("🟡 الذهب"), text.index("💵 العملات"))
+
+    def test_gold_report_explains_estimate(self) -> None:
+        text = reports.build_report(1, self.db)
+        self.assertIn("تقديري", text)
+
+    def test_best_and_worst_movers_are_listed(self) -> None:
+        text = reports.build_report(1, self.db)
+        self.assertIn("أعلى ارتفاع", text)
+        self.assertIn("+12.00%", text)
+        self.assertIn("أكبر هبوط", text)
+        self.assertIn("-20.00%", text)
+
+
 class SendDueReportsTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
